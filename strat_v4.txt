@@ -1,0 +1,96 @@
+# agents/strategy_agent.py (V4 - Upgrade to Pro)
+import os
+import google.generativeai as genai
+from config.settings import Config
+import colorama
+from colorama import Fore
+
+colorama.init(autoreset=True)
+
+class StrategyAgent:
+    def __init__(self):
+        self.api_key = os.getenv("GOOGLE_API_KEY")
+        self.model = None
+        
+        if not self.api_key:
+            print(f"{Fore.RED}[Strategy] ⚠️ 未偵測到 GOOGLE_API_KEY。")
+            return
+
+        try:
+            genai.configure(api_key=self.api_key)
+            
+            # --- 升級決策：優先使用 Pro 模型 ---
+            # Pro 模型在邏輯推理、風險評估上比 Flash 更嚴謹，適合擔任「投資長」
+            target_model = "models/gemini-2.5-pro" 
+            
+            available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+            
+            if target_model not in available_models:
+                print(f"{Fore.YELLOW}[Strategy] 警告：找不到 {target_model}，嘗試自動適配...")
+                # 如果沒有 1.5 Pro，找任何帶有 'pro' 的
+                pro_alts = [m for m in available_models if "gemini" in m and "pro" in m]
+                if pro_alts:
+                    target_model = pro_alts[0]
+                else:
+                    # 真的沒有才用 Flash
+                    target_model = "models/gemini-2.0-flash"
+
+            print(f"{Fore.GREEN}[Strategy] AI 投資長已上線，核心升級為: {target_model}")
+            self.model = genai.GenerativeModel(target_model)
+            
+        except Exception as e:
+            print(f"{Fore.RED}[Strategy] 初始化失敗: {e}")
+
+    def consult(self, stock_id, tech_data, warrant_plan, macro_data, portfolio_data):
+        if not self.model:
+            return "❌ AI 模組未正確載入。"
+
+        # 1. 整理情報
+        cash = portfolio_data['cash']
+        positions_value = sum(p['cost']*p['qty'] for p in portfolio_data['positions'])
+        total_assets = cash + positions_value
+        cash_ratio = (cash / total_assets * 100) if total_assets > 0 else 100
+        
+        macro_score, macro_view = macro_data
+        curr, target, support = tech_data
+        roi = (target - curr) / curr * 100
+        
+        # 2. Prompt 優化 (加強風險意識)
+        prompt = f"""
+        Role: Senior Hedge Fund CIO (Risk-Averse, High-Conviction style).
+        
+        [Market Intelligence]
+        Target: {stock_id}
+        Current Price: {curr}
+        AI Projection: Bullish to {target:.1f} (+{roi:.2f}%)
+        Key Support: {support:.1f} (-{(curr-support)/curr*100:.1f}%)
+        Macro Environment: Score {macro_score} (Analysis: {macro_view})
+        
+        [Portfolio Health]
+        Cash Available: ${cash:,.0f} ({cash_ratio:.1f}% of portfolio)
+        Current Holdings Value: ${positions_value:,.0f}
+        
+        [Proposed Tactic]
+        Strategy: {warrant_plan['strategy']}
+        Strike Price: {warrant_plan['filters']['價內外']}
+        Hard Stop Loss: {warrant_plan['stop_loss_trigger']}
+        
+        [Decision Task]
+        Analyze the conflict between AI's high ROI prediction ({roi:.2f}%) and the Macro Environment.
+        You MUST consider:
+        1. Is the potential profit worth the risk of the support breaking?
+        2. Given the user wants to recover capital (aggressive but disciplined), is this the right trade?
+        3. Be skeptical. If Macro is bad, demand higher standards.
+        
+        [Output Format]
+        **決策：** [強力買進 / 小額試單 / 觀望 / 賣出]
+        **風險評估：** [一針見血的分析]
+        **操作指令：** [明確的資金比例 (例如: 投入 10% 現金) 與戰術執行]
+        Reply in Traditional Chinese.
+        """
+
+        try:
+            response = self.model.generate_content(prompt)
+            return response.text
+        except Exception as e:
+            return f"AI 思考失敗: {e}"
